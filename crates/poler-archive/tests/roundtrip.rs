@@ -166,6 +166,9 @@ fn patch_and_rollback() {
     let r = PolerReader::open(&out).unwrap();
     assert!(r.verify().unwrap().all_ok, "после патча целостность держится");
     assert!(r.find_file("config/new.txt").is_some(), "новая запись видна");
+    // Windows: rollback делает set_len — на файле с активным mmap-ридером
+    // это os error 1224 (user-mapped section); ридер закрываем ДО мутации
+    drop(r);
 
     let _rrep = rollback_archive(&out).unwrap();
     let r2 = PolerReader::open(&out).unwrap();

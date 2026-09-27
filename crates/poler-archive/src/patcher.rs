@@ -457,10 +457,13 @@ pub fn patch_archive(
     trailer[68..100].copy_from_slice(&stream_digest);
     out.write_all(&trailer).map_err(|e| format!("write trailer: {e}"))?;
     let file = out.into_inner().map_err(|e| format!("flush: {e}"))?;
+    // Windows: set_len на файле с активным mmap-отображением (наш PolerReader)
+    // = os error 1224. Ридер и readback больше не нужны — закрываем ДО truncate.
+    drop(reader);
+    drop(readback);
     file.set_len(final_len).map_err(|e| format!("truncate: {e}"))?;
     file.sync_all().map_err(|e| format!("sync: {e}"))?;
     drop(file);
-    drop(reader);
 
     let files_after = (files_before as i64
         + ops.iter().filter(|o| o.kind == PatchKind::Add).count() as i64
@@ -511,7 +514,15 @@ pub fn rollback_archive(path: &Path) -> Result<RollbackReport, String> {
         .map_err(|e| format!("seek: {e}"))?;
     file.write_all(&buf[16..])
         .map_err(|e| format!("write trailer: {e}"))?;
-    file.set_len(old_len).map_err(|e| format!("truncate: {e}"))?;
+    file.set_len(old_len).map_err(|e| {
+        // Windows 1224: файл с активным mmap (другой процесс держит PolerReader/FUSE)
+        let hint = if e.raw_os_error() == Some(1224) {
+            " — файл открыт читателем с mmap (PolerReader/FUSE-маунт): закройте читателя и повторите"
+        } else {
+            ""
+        };
+        format!("truncate: {e}{hint}")
+    })?;
     file.sync_all().map_err(|e| format!("sync: {e}"))?;
     drop(file);
     std::fs::remove_file(&bak).map_err(|e| format!("remove bak: {e}"))?;
