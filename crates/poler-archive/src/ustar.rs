@@ -204,8 +204,54 @@ fn pad_bytes(size: u64) -> Vec<u8> {
 }
 
 fn ustar_header(e: &TarEntry) -> io::Result<Vec<u8>> {
+    let name_bytes = e.name.as_bytes();
+    if name_bytes.len() <= 100 {
+        return make_single_header(e, &e.name, "");
+    }
+    // Пробуем ustar prefix split
+    if let Ok((file, prefix)) = split_ustar_name(&e.name) {
+        return make_single_header(e, &file, &prefix);
+    }
+    // Если имя длинное или не делится по слэшу — генерируем GNU LongName ('L' record)
+    let mut out = Vec::with_capacity(512 + 512 + pad_bytes(name_bytes.len() as u64).len());
+    let mut long_hdr = vec![0u8; 512];
+    put_field(&mut long_hdr[0..100], b"././@LongLink")?;
+    put_octal(&mut long_hdr[100..108], 7, 0o644);
+    put_octal(&mut long_hdr[108..116], 7, 0);
+    put_octal(&mut long_hdr[116..124], 7, 0);
+    put_octal(&mut long_hdr[124..136], 11, name_bytes.len() as u64);
+    put_octal(&mut long_hdr[136..148], 11, e.mtime);
+    for x in long_hdr[148..156].iter_mut() {
+        *x = b' ';
+    }
+    long_hdr[156] = b'L';
+    long_hdr[257..262].copy_from_slice(b"ustar");
+    long_hdr[262] = 0;
+    long_hdr[263..265].copy_from_slice(b"00");
+    let sum: u32 = long_hdr.iter().map(|&x| x as u32).sum();
+    put_octal(&mut long_hdr[148..154], 6, sum as u64);
+    long_hdr[154] = 0;
+    long_hdr[155] = b' ';
+
+    out.extend_from_slice(&long_hdr);
+    out.extend_from_slice(name_bytes);
+    out.extend_from_slice(&pad_bytes(name_bytes.len() as u64));
+
+    // Урезанное имя в заголовке файла для совместимости (до 99 байт)
+    let max_short = name_bytes.len().min(99);
+    let mut cut = max_short;
+    while cut > 0 && !e.name.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    let short_name = &e.name[..cut];
+    let file_hdr = make_single_header(e, short_name, "")?;
+    out.extend_from_slice(&file_hdr);
+
+    Ok(out)
+}
+
+fn make_single_header(e: &TarEntry, name: &str, prefix: &str) -> io::Result<Vec<u8>> {
     let mut b = vec![0u8; 512];
-    let (name, prefix) = split_ustar_name(&e.name).map_err(io::Error::other)?;
     put_field(&mut b[0..100], name.as_bytes())?;
     put_octal(&mut b[100..108], 7, e.mode as u64);
     put_octal(&mut b[108..116], 7, 0); // uid
@@ -223,7 +269,9 @@ fn ustar_header(e: &TarEntry) -> io::Result<Vec<u8>> {
     put_field(&mut b[297..329], b"poler")?;
     put_octal(&mut b[329..337], 7, 0);
     put_octal(&mut b[337..345], 7, 0);
-    put_field(&mut b[345..500], prefix.as_bytes())?;
+    if !prefix.is_empty() {
+        put_field(&mut b[345..500], prefix.as_bytes())?;
+    }
     let sum: u32 = b.iter().map(|&x| x as u32).sum();
     put_octal(&mut b[148..154], 6, sum as u64);
     b[154] = 0;
