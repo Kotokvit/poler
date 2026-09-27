@@ -315,11 +315,13 @@ fn split_ustar_name(name: &str) -> Result<(String, String), String> {
 }
 
 fn put_field(dst: &mut [u8], val: &[u8]) -> io::Result<()> {
-    if val.len() >= dst.len() {
+    if val.len() > dst.len() {
         return Err(io::Error::other("поле ustar переполнено"));
     }
     dst[..val.len()].copy_from_slice(val);
-    dst[val.len()..].fill(0);
+    if val.len() < dst.len() {
+        dst[val.len()..].fill(0);
+    }
     Ok(())
 }
 
