@@ -13,6 +13,11 @@ categories = ["command-line-utilities", "compression"]
 name = "poler_archive"
 path = "src/lib.rs"
 
+[dev-dependencies]
+# генераторы тест-контейнеров (те же крейты, что в [dependencies] — без пересборки)
+zstd = "0.13"
+flate2 = { version = "1.0", default-features = false, features = ["rust_backend"] }
+
 [[bin]]
 name = "poler"
 path = "src/bin/poler.rs"

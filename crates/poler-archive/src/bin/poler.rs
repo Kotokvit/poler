@@ -26,8 +26,8 @@ poler — суверенный стриминговый архиватор .pole
   poler verify ARCHIVE.poler              целостность (SHA-256 потока и записей)
   poler extract ARCHIVE.poler [DIR]       распаковка (защита от zip-slip)
   poler cat ARCHIVE.poler ЗАПИСЬ          вывести запись в stdout
-  poler patch ARCHIVE.poler add|replace|delete ИМЯ [ФАЙЛ]
-      --ops 'add name=file; replace name=file; delete name'  (список операций)
+  poler patch ARCHIVE.poler --ops 'add name=file; replace name=file; delete name'
+  poler patch ARCHIVE.poler add|replace|delete ИМЯ [ФАЙЛ]   (разовая операция)
   poler rollback ARCHIVE.poler            откат к .polerbak
 
 ОПЦИИ create/patch: --tier fast|deep|auto (def: auto)  --no-dedup
@@ -48,6 +48,10 @@ fn main() {
 fn run(args: Vec<String>) -> Result<i32, String> {
     if args.is_empty() || args[0] == "-h" || args[0] == "--help" || args[0] == "help" {
         print!("{USAGE}");
+        return Ok(0);
+    }
+    if args[0] == "-V" || args[0] == "--version" {
+        println!("poler {}", env!("CARGO_PKG_VERSION"));
         return Ok(0);
     }
     match args[0].as_str() {
@@ -322,6 +326,30 @@ fn cmd_patch(rest: &[String]) -> Result<i32, String> {
                     }
                     ops.push(parse_op(one)?);
                 }
+            }
+            // позиционная разовая операция: patch ARCHIVE add ИМЯ ФАЙЛ
+            // (или add ИМЯ=ФАЙЛ — как внутри --ops)
+            "add" | "replace" if path.is_some() => {
+                let kind = rest[i].as_str();
+                let arg1 = rest
+                    .get(i + 1)
+                    .ok_or_else(|| format!("{kind} ИМЯ ФАЙЛ (или {kind} ИМЯ=ФАЙЛ)"))?;
+                i += 1;
+                let spec = if arg1.contains('=') {
+                    format!("{kind} {arg1}")
+                } else {
+                    let file = rest
+                        .get(i + 1)
+                        .ok_or_else(|| format!("{kind} ИМЯ ФАЙЛ"))?;
+                    i += 1;
+                    format!("{kind} {arg1}={file}")
+                };
+                ops.push(parse_op(&spec)?);
+            }
+            "delete" if path.is_some() => {
+                let name = rest.get(i + 1).ok_or("delete ИМЯ")?;
+                i += 1;
+                ops.push(PatchOp::delete(name.trim()));
             }
             s if path.is_none() => path = Some(s.to_string()),
             s => return Err(format!("лишний аргумент patch: {s}")),

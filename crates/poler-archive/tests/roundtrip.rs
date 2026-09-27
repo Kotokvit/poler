@@ -200,3 +200,112 @@ fn verify_catches_corruption() {
     assert!(!rep.all_ok, "порча обязана быть поймана");
     let _ = fs::remove_dir_all(&dir);
 }
+
+// ─── 7. CLI-транскодинг контейнеров на лету: .tar.gz / .tar.zst / .tar ───
+//
+// Реальный бинарник `poler` (CARGO_BIN_EXE): gzip/zstd-декодеры разворачивают
+// поток прямо в конвейер FastCDC — без временных файлов. Проверяем, что
+// TarObserver строит файловую таблицу из внутреннего tar, а не пакует
+// контейнер как монолитный блоб.
+
+#[test]
+fn cli_transcode_containers() {
+    use std::io::{Read, Write};
+    use std::process::Command;
+
+    let dir = tmpdir("transcode");
+    let src = dir.join("data");
+    fs::create_dir_all(src.join("nested")).unwrap();
+    fs::write(src.join("a.txt"), b"transcode me").unwrap();
+    fs::write(src.join("nested/b.bin"), vec![42u8; 700_000]).unwrap();
+
+    // tar-поток через публичный генератор: абсолютный путь даёт те же
+    // имена записей `data/...`, что и относительный — cwd не трогаем
+    // (параллельные тесты не должны соревноваться за set_current_dir).
+    let mut tar = FsTarReader::new(&[src.clone()]).unwrap();
+    let mut tar_bytes = Vec::new();
+    tar.read_to_end(&mut tar_bytes).unwrap();
+
+    // .tar.gz — flate2 rust_backend, тот же стек, что в cmd_create
+    let tgz = dir.join("data.tar.gz");
+    {
+        let mut enc = flate2::write::GzEncoder::new(
+            fs::File::create(&tgz).unwrap(),
+            flate2::Compression::default(),
+        );
+        enc.write_all(&tar_bytes).unwrap();
+        enc.finish().unwrap();
+    }
+    // .tar.zst — zstd, та же версия крейта, что в cmd_create
+    let tzst = dir.join("data.tar.zst");
+    {
+        let mut enc = zstd::stream::Encoder::new(fs::File::create(&tzst).unwrap(), 3).unwrap();
+        enc.write_all(&tar_bytes).unwrap();
+        enc.finish().unwrap();
+    }
+    // .tar — без декодера (прямой поток)
+    let plain = dir.join("data.tar");
+    fs::write(&plain, &tar_bytes).unwrap();
+
+    let bin = env!("CARGO_BIN_EXE_poler");
+
+    // --version: стандартный вызов установщиков/скриптов
+    let ver = Command::new(bin).arg("--version").output().unwrap();
+    assert!(ver.status.success(), "--version упал");
+    assert!(
+        String::from_utf8_lossy(&ver.stdout).starts_with("poler 0."),
+        "--version: {}",
+        String::from_utf8_lossy(&ver.stdout)
+    );
+
+    for (container, tag) in [(&tgz, "targz"), (&tzst, "tarzst"), (&plain, "tar")] {
+        let out = dir.join(format!("from_{tag}.poler"));
+        let st = Command::new(bin)
+            .arg("create")
+            .arg(out.as_os_str())
+            .arg(container.as_os_str())
+            .output()
+            .unwrap();
+        assert!(
+            st.status.success(),
+            "{tag}: create упал: {}",
+            String::from_utf8_lossy(&st.stderr)
+        );
+        // контейнер распакован в поток: размер ≈ tar-байты, а не запакованный блоб
+        let r = PolerReader::open(&out).unwrap();
+        assert!(r.info().tar_mode, "{tag}: tar-режим распознан");
+        assert_eq!(r.files().len(), 2, "{tag}: файловая таблица построена");
+        assert!(r.find_file("data/a.txt").is_some(), "{tag}: a.txt в таблице");
+        assert!(
+            r.find_file("data/nested/b.bin").is_some(),
+            "{tag}: b.bin в таблице"
+        );
+        assert!(r.verify().unwrap().all_ok, "{tag}: verify после транскодинга");
+        // транскодинг ≈ прямая упаковка того же tar-потока (±3%)
+        let direct = dir.join(format!("direct_{tag}.poler"));
+        write_stream(
+            fs::File::open(&plain).unwrap(),
+            &direct,
+            StreamWriteConfig::default(),
+            "direct",
+        )
+        .unwrap();
+        let (a, b) = (fs::metadata(&out).unwrap().len(), fs::metadata(&direct).unwrap().len());
+        assert!(
+            (a as i64 - b as i64).unsigned_abs() < b / 33,
+            "{tag}: размер {a} отличается от прямой упаковки {b} более чем на 3%"
+        );
+        let _ = fs::remove_file(&direct);
+        // содержимое бит-в-бит
+        let ex = dir.join(format!("ex_{tag}"));
+        let rep = r.extract_all(&ex).unwrap();
+        assert_eq!(rep.files_ok, 2, "{tag}: распаковка сошлась по SHA-256");
+        assert_eq!(
+            fs::read(ex.join("data/nested/b.bin")).unwrap(),
+            vec![42u8; 700_000],
+            "{tag}: содержимое бит-в-бит"
+        );
+        let _ = fs::remove_dir_all(&ex);
+    }
+    let _ = fs::remove_dir_all(&dir);
+}

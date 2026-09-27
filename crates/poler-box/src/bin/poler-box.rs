@@ -18,7 +18,9 @@ poler-box — нативная коробка без ОС поверх .poler-а
 Изоляция: userns + pivot_root(tmpfs) + seccomp-белый список + netns + pidns.
 
 ИСПОЛЬЗОВАНИЕ:
-  poler-box run ARCHIVE.poler ЗАПИСЬ [аргументы payload...]
+  poler-box run [ОПЦИИ] ARCHIVE.poler ЗАПИСЬ [аргументы payload...]
+      ОПЦИИ (обязательно ДО имени ЗАПИСИ; всё после ЗАПИСИ —
+              уходит в argv payload как есть):
       --map ПРЕФИКС=КАТАЛОГ   смонтировать записи архива в каталог коробки
       --rss-mb N               лимит RSS дерева (def: 512)
       --cpu-s N                лимит CPU-времени, с (def: 60)
@@ -75,6 +77,14 @@ fn cmd_run(rest: &[String]) -> Result<i32, String> {
     while i < rest.len() {
         let a = rest[i].as_str();
         if after_entry {
+            // защита от молчаливого проглатывания: флаг коробки после ЗАПИСИ
+            // иначе ушёл бы в argv payload, а лимит остался бы дефолтным
+            if matches!(a, "--map" | "--rss-mb" | "--cpu-s" | "--tmpfs-mb" | "--no-isolate") {
+                return Err(
+                    "флаги коробки — ДО имени ЗАПИСИ: poler-box run [ОПЦИИ] ARCHIVE.poler ЗАПИСЬ [argv payload]"
+                        .into(),
+                );
+            }
             payload_args.push(a.to_string());
         } else {
             match a {
