@@ -413,6 +413,12 @@ impl TarObserver {
 pub struct StreamWriter {
     cfg: StreamWriteConfig,
     file: File,
+    /// Отдельный read-only хендл .part для дедуп-верификации.
+    /// КРИТИЧНО для Windows: позиционированное чтение (seek_read) двигает
+    /// файловый курсор — смешение с cursor-записью write_all на ОДНОМ
+    /// хендле затирает уже записанные чанки. На unix (pread) курсор не
+    /// трогается, но отдельный хендл корректен и там.
+    readback: Option<File>,
     part_path: PathBuf,
     final_path: PathBuf,
     /// Sidecar файлой таблицы (только метаданные, не сырые данные).
@@ -461,6 +467,7 @@ impl StreamWriter {
         Ok(StreamWriter {
             cfg,
             file,
+            readback: None,
             part_path,
             final_path: out.to_path_buf(),
             files_spill,
@@ -581,6 +588,7 @@ impl StreamWriter {
         trailer[60..68].copy_from_slice(&final_len.to_le_bytes());
         trailer[68..100].copy_from_slice(&stream_digest);
         self.file.write_all(&trailer)?;
+        self.readback = None; // закрыть до rename: не держать хендлы
         self.file.sync_all()?;
         // дескриптор закроется в Drop: rename с открытым хендлом
         // валиден на Linux
@@ -618,6 +626,14 @@ impl StreamWriter {
         })
     }
 
+    /// Дедуп-проверка через отдельный read-only хендл (см. поле `readback`).
+    fn dedup_lookup(&mut self, hash: &[u8; 32]) -> Option<u64> {
+        if self.readback.is_none() {
+            self.readback = File::open(&self.part_path).ok();
+        }
+        self.dedup.lookup(hash, self.readback.as_ref()?)
+    }
+
     /// Вырезать все готовые чанки из буфера. `eof` — источник исчерпан:
     /// тогда остаток режется как хвост (граница может быть < max).
     fn cut_ready(&mut self, eof: bool) -> io::Result<()> {
@@ -647,7 +663,7 @@ impl StreamWriter {
         self.raw_pos += raw.len() as u64;
 
         if self.cfg.dedup {
-            if let Some(stored_off) = self.dedup.lookup(&hash, &self.file) {
+            if let Some(stored_off) = self.dedup_lookup(&hash) {
                 self.logical.push(LogicalEntry { raw_off, stored_off, raw_len });
                 self.dedup.record_hit();
                 self.dedup_chunks += 1;
@@ -771,6 +787,7 @@ impl StreamWriter {
 impl Drop for StreamWriter {
     fn drop(&mut self) {
         if !self.finished {
+            self.readback = None; // закрыть до удаления (Windows: занятый файл не удалить)
             let _ = std::fs::remove_file(&self.part_path);
             let _ = std::fs::remove_file(&self.files_spill_path);
         }

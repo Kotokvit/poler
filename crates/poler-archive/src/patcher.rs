@@ -186,15 +186,20 @@ pub fn patch_archive(
         std::fs::write(&bak, &b).map_err(|e| format!("bak: {e}"))?;
     }
 
-    // ── write-хендл (read+write: дедуп-верификация делает pread) ──
+    // ── write-хендл + ОТДЕЛЬНЫЙ read-хендл для дедуп-верификации ──
+    // КРИТИЧНО: позиционированное чтение (Windows seek_read) двигает файловый
+    // курсор — pread через write-хендл затирал бы записанное (BufWriter пишет
+    // по курсору). Поэтому дедуп-верификация читает через отдельный
+    // read-only хендл того же файла.
     let mut file = OpenOptions::new()
-        .read(true)
         .write(true)
         .open(path)
-        .map_err(|e| format!("open rw {}: {e}", path.display()))?;
+        .map_err(|e| format!("open w {}: {e}", path.display()))?;
     file.seek(SeekFrom::Start(layout.file_len - TRAILER_SIZE as u64))
         .map_err(|e| format!("seek: {e}"))?;
     let mut out = BufWriter::with_capacity(1024 * 1024, file);
+    let readback = std::fs::File::open(path)
+        .map_err(|e| format!("open r {}: {e}", path.display()))?;
 
     // ── дедуп-реестр старых физических чанков ──
     let mut dedup = ChunkDedup::new();
@@ -280,7 +285,7 @@ pub fn patch_archive(
         }
     };
 
-    let _ = &out; // дедуп-верификация ниже читает через get_ref (pread)
+    let _ = &out; // write-хендл больше не читается: дедуп-верификация — через отдельный readback
     for op in ops {
         if op.kind == PatchKind::Delete {
             continue;
@@ -291,7 +296,7 @@ pub fn patch_archive(
             let raw_len = chunk.len() as u32;
             let raw_off = next_raw;
             next_raw += chunk.len() as u64;
-            if let Some(stored_off) = dedup.lookup(&hash, out.get_ref()) {
+            if let Some(stored_off) = dedup.lookup(&hash, &readback) {
                 logical_new.push((raw_off, stored_off, raw_len));
                 deduped_new += 1;
                 continue;
