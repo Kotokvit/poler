@@ -122,6 +122,50 @@ fn cmd_create(rest: &[String]) -> Result<i32, String> {
         // конвейер: tar -c dir | poler create out.poler -
         write_stream(io::stdin(), &out, cfg, "stdin-stream")
             .map_err(|e| format!("stdin: {e}"))?
+    } else if sources.len() == 1 && Path::new(&sources[0]).is_file() {
+        let src_path = Path::new(&sources[0]);
+        let name_lower = src_path
+            .file_name()
+            .map(|s| s.to_string_lossy().to_lowercase())
+            .unwrap_or_default();
+
+        if name_lower.ends_with(".tar.gz") || name_lower.ends_with(".tgz") {
+            let f = fs::File::open(src_path)
+                .map_err(|e| format!("{}: {e}", src_path.display()))?;
+            let gz = flate2::read::MultiGzDecoder::new(f);
+            write_stream(gz, &out, cfg, "tar.gz-stream")
+                .map_err(|e| format!("{}: {e}", out.display()))?
+        } else if name_lower.ends_with(".tar.zst") || name_lower.ends_with(".tzst") {
+            let f = fs::File::open(src_path)
+                .map_err(|e| format!("{}: {e}", src_path.display()))?;
+            let zdec = zstd::Decoder::new(f)
+                .map_err(|e| format!("{}: {e}", src_path.display()))?;
+            write_stream(zdec, &out, cfg, "tar.zst-stream")
+                .map_err(|e| format!("{}: {e}", out.display()))?
+        } else if name_lower.ends_with(".tar") {
+            let f = fs::File::open(src_path)
+                .map_err(|e| format!("{}: {e}", src_path.display()))?;
+            write_stream(f, &out, cfg, "tar-stream")
+                .map_err(|e| format!("{}: {e}", out.display()))?
+        } else if name_lower.ends_with(".gz") {
+            let f = fs::File::open(src_path)
+                .map_err(|e| format!("{}: {e}", src_path.display()))?;
+            let gz = flate2::read::MultiGzDecoder::new(f);
+            write_stream(gz, &out, cfg, "gz-stream")
+                .map_err(|e| format!("{}: {e}", out.display()))?
+        } else if name_lower.ends_with(".zst") {
+            let f = fs::File::open(src_path)
+                .map_err(|e| format!("{}: {e}", src_path.display()))?;
+            let zdec = zstd::Decoder::new(f)
+                .map_err(|e| format!("{}: {e}", src_path.display()))?;
+            write_stream(zdec, &out, cfg, "zst-stream")
+                .map_err(|e| format!("{}: {e}", out.display()))?
+        } else {
+            let paths: Vec<PathBuf> = sources.iter().map(PathBuf::from).collect();
+            let tar = FsTarReader::new(&paths)?;
+            write_stream(tar, &out, cfg, "archive")
+                .map_err(|e| format!("{}: {e}", out.display()))?
+        }
     } else {
         let paths: Vec<PathBuf> = sources.iter().map(PathBuf::from).collect();
         let tar = FsTarReader::new(&paths)?;

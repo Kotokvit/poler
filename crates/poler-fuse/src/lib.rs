@@ -52,7 +52,7 @@ impl PolerFs {
             ROOT_INO,
             FsNode {
                 name: String::new(),
-                parent: ROOT_INO,
+                parent: 0,
                 file: None,
             },
         );
@@ -139,7 +139,7 @@ impl PolerFs {
             } else {
                 0o444
             },
-            nlink: 1,
+            nlink: if kind == fuser::FileType::Directory { 2 } else { 1 },
             uid: unsafe { libc::getuid() },
             gid: unsafe { libc::getgid() },
             rdev: 0,
@@ -179,8 +179,24 @@ impl Filesystem for PolerFs {
     fn open(&mut self, _req: &Request<'_>, ino: u64, flags: i32, reply: ReplyOpen) {
         if flags & libc::O_ACCMODE != libc::O_RDONLY {
             reply.error(libc::EROFS); // архив — только чтение
-        } else if self.nodes.contains_key(&ino) {
-            reply.opened(0, 0);
+        } else if let Some(node) = self.nodes.get(&ino) {
+            if node.file.is_some() {
+                reply.opened(0, 0);
+            } else {
+                reply.error(libc::EISDIR);
+            }
+        } else {
+            reply.error(libc::ENOENT);
+        }
+    }
+
+    fn opendir(&mut self, _req: &Request<'_>, ino: u64, _flags: i32, reply: ReplyOpen) {
+        if let Some(node) = self.nodes.get(&ino) {
+            if node.is_dir() {
+                reply.opened(0, 0);
+            } else {
+                reply.error(libc::ENOTDIR);
+            }
         } else {
             reply.error(libc::ENOENT);
         }
@@ -251,6 +267,11 @@ impl Filesystem for PolerFs {
             })
             .collect();
         children.sort_by(|a, b| a.1.cmp(&b.1));
+        let parent_ino = if ino == ROOT_INO {
+            ROOT_INO
+        } else {
+            self.nodes.get(&ino).map(|n| n.parent).unwrap_or(ROOT_INO)
+        };
         children.insert(
             0,
             (
@@ -262,7 +283,7 @@ impl Filesystem for PolerFs {
         children.insert(
             1,
             (
-                self.nodes[&ino].parent,
+                parent_ino,
                 "..".to_string(),
                 fuser::FileType::Directory,
             ),
@@ -274,6 +295,7 @@ impl Filesystem for PolerFs {
             .collect();
 
         for (i, (child_ino, kind, name)) in entries.iter().enumerate().skip(offset as usize) {
+            // reply.add returns true if the buffer is full
             if reply.add(*child_ino, (i + 1) as i64, *kind, name) {
                 break;
             }
