@@ -34,6 +34,14 @@
 //! poler-engine з архіву всередині коробки, який відкриває інші архіви
 //! (передані в rootfs) — обгортка всередині обгортки, без кінця.
 
+//! ## Портативність
+//! Ізоляція — суто API ядра Linux (userns/pivot_root/seccomp/netns/pidns):
+//! увесь цей модуль компілюється тільки на Linux. `safe-extract`/`list`
+//! (у бінарнику poler-box) працюють на всіх ОС — це тонкі обгортки
+//! poler-archive без сисколів ядра.
+
+#![cfg(target_os = "linux")]
+
 use std::collections::VecDeque;
 use std::io::Write;
 use std::path::{Path, PathBuf};

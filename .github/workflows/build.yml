@@ -19,7 +19,7 @@ jobs:
         run: cargo build --release --verbose
       - name: Tests
         run: cargo test -p poler-archive --verbose
-      - name: Smoke round-trip (unix)
+      - name: Smoke round-trip (unix: linux + macos)
         if: runner.os != 'Windows'
         shell: bash
         run: |
@@ -29,8 +29,33 @@ jobs:
           ./target/release/poler create smoke.poler smoke/data
           ./target/release/poler verify smoke.poler
           ./target/release/poler extract smoke.poler out
-          diff smoke/data/a.txt out/smoke/data/a.txt
-          cmp smoke/data/nested/b.bin out/smoke/data/nested/b.bin
+          # корень архива = последний компонент пути (как `tar -C smoke -c data`):
+          # записи хранятся как data/..., распаковка -> out/data/...
+          diff smoke/data/a.txt out/data/a.txt
+          cmp smoke/data/nested/b.bin out/data/nested/b.bin
+          echo "SMOKE OK"
+
+      - name: Smoke round-trip (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path smoke/data/nested | Out-Null
+          "hello poler" | Out-File -Encoding ascii -NoNewline smoke/data/a.txt
+          $b = New-Object byte[] 262144
+          (New-Object System.Random).NextBytes($b)
+          [IO.File]::WriteAllBytes("$PWD/smoke/data/nested/b.bin", $b)
+          ./target/release/poler.exe create smoke.poler smoke/data
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          ./target/release/poler.exe verify smoke.poler
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          ./target/release/poler.exe extract smoke.poler out
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          $h1 = (Get-FileHash smoke/data/a.txt -Algorithm SHA256).Hash
+          $h2 = (Get-FileHash out/data/a.txt -Algorithm SHA256).Hash
+          if ($h1 -ne $h2) { Write-Error "a.txt mismatch"; exit 1 }
+          $b1 = (Get-FileHash smoke/data/nested/b.bin -Algorithm SHA256).Hash
+          $b2 = (Get-FileHash out/data/nested/b.bin -Algorithm SHA256).Hash
+          if ($b1 -ne $b2) { Write-Error "b.bin mismatch"; exit 1 }
           echo "SMOKE OK"
 
   fuse:

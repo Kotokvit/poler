@@ -13,7 +13,45 @@
 //! на пару) допустима и не влияет на целостность.
 
 use std::collections::HashMap;
-use std::os::unix::fs::FileExt;
+
+/// Позиционированное точное чтение без смены файлового курсора:
+/// pread-семантика на всех поддерживаемых ОС.
+///
+/// * unix — `FileExt::read_exact_at` (pread);
+/// * windows — `FileExt::seek_read` (перекрывающее чтение; дозаполняем буфер
+///   циклом, т.к. seek_read не гарантирует заполнение);
+/// * прочие ОС — seek+read по &File (курсор общий — только для
+///   однопоточного использования).
+#[cfg(unix)]
+fn pread_exact(f: &std::fs::File, buf: &mut [u8], off: u64) -> std::io::Result<()> {
+    use std::os::unix::fs::FileExt;
+    f.read_exact_at(buf, off)
+}
+
+#[cfg(windows)]
+fn pread_exact(f: &std::fs::File, buf: &mut [u8], off: u64) -> std::io::Result<()> {
+    use std::os::windows::fs::FileExt;
+    let mut done = 0usize;
+    while done < buf.len() {
+        let n = f.seek_read(&mut buf[done..], off + done as u64)?;
+        if n == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "pread_exact: EOF",
+            ));
+        }
+        done += n;
+    }
+    Ok(())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn pread_exact(f: &std::fs::File, buf: &mut [u8], off: u64) -> std::io::Result<()> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut r: &std::fs::File = f;
+    r.seek(SeekFrom::Start(off))?;
+    r.read_exact(buf)
+}
 
 /// Параметры нарезки FastCDC (нормализованный вариант).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -176,7 +214,7 @@ impl ChunkDedup {
         let key = Self::key(hash);
         let off = *self.map.get(&key)?;
         let mut hdr = [0u8; 44];
-        store.read_exact_at(&mut hdr, off).ok()?;
+        pread_exact(store, &mut hdr, off).ok()?;
         let mut cand = [0u8; 32];
         cand.copy_from_slice(&hdr[0..32]);
         if cand == *hash {

@@ -5,17 +5,23 @@
 //! (только loopback), pidns (payload = pid 1), губернатор RSS/CPU.
 //! Образа ОС нет: rootfs коробки стримится прямо из архива.
 //!
+//! `run` — только Linux (namespaces/seccomp — API ядра);
+//! `safe-extract`/`list` работают на всех ОС (чистый poler-archive).
+//!
 //! Stage2-вход (`POLER_BOX_STAGE2=1`) обязан стоять ДО парсинга argv —
 //! им же пользуется unshare-хелпер при ре-запуске нас самих.
 
 use std::env;
-use std::path::PathBuf;
 
+#[cfg(target_os = "linux")]
 use poler_box::{run_box, BoxSpec};
+#[cfg(target_os = "linux")]
+use std::path::PathBuf;
 
 const USAGE: &str = "\
 poler-box — нативная коробка без ОС поверх .poler-архивов
-Изоляция: userns + pivot_root(tmpfs) + seccomp-белый список + netns + pidns.
+Изоляция (run — только Linux): userns + pivot_root(tmpfs) + seccomp + netns + pidns.
+safe-extract и list — на всех ОС (Windows/macOS включительно).
 
 ИСПОЛЬЗОВАНИЕ:
   poler-box run [ОПЦИИ] ARCHIVE.poler ЗАПИСЬ [аргументы payload...]
@@ -34,7 +40,8 @@ poler-box — нативная коробка без ОС поверх .poler-а
 Отчёт — JSON в stdout.";
 
 fn main() {
-    // stage2: мы перезапущены unshare-хелпером с env-спецификацией
+    // stage2: мы перезапущены unshare-хелпером с env-спецификацией (только Linux)
+    #[cfg(target_os = "linux")]
     if env::var_os("POLER_BOX_STAGE2").is_some() {
         let code = poler_box::stage2_main();
         std::process::exit(code);
@@ -55,13 +62,20 @@ fn run(args: Vec<String>) -> Result<i32, String> {
         return Ok(0);
     }
     match args[0].as_str() {
+        #[cfg(target_os = "linux")]
         "run" => cmd_run(&args[1..]),
+        #[cfg(not(target_os = "linux"))]
+        "run" => Err(
+            "изоляция (userns/pivot_root/seccomp) — API ядра Linux; на этой ОС доступны safe-extract и list"
+                .into(),
+        ),
         "safe-extract" | "x" => cmd_safe_extract(&args[1..]),
         "list" => cmd_list(&args[1..]),
         other => Err(format!("неизвестная команда «{other}». --help — справка")),
     }
 }
 
+#[cfg(target_os = "linux")]
 fn cmd_run(rest: &[String]) -> Result<i32, String> {
     let mut archive: Option<String> = None;
     let mut entry: Option<String> = None;
