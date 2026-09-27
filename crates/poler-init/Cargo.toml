@@ -1,0 +1,15 @@
+[package]
+name = "poler-init"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Sovereign Linux PID 1 init system replacing legacy GNU sysvinit/bash pipelines"
+
+[dependencies]
+libc = "0.2"
+
+[[bin]]
+name = "poler-init"
+path = "src/main.rs"
