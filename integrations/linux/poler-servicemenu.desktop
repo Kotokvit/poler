@@ -1,0 +1,41 @@
+[Desktop Entry]
+Type=Service
+X-KDE-ServiceTypes=KonqPopupMenu/Plugin
+MimeType=application/x-poler;
+Actions=extractHere;extractTo;verify;list;mount;boxExtract;
+
+[Desktop Action extractHere]
+Name=POLER: извлечь сюда
+Name[en]=POLER: extract here
+Exec=poler-gui extract-here %F
+Icon=package-x-generic
+
+[Desktop Action extractTo]
+Name=POLER: извлечь в…
+Name[en]=POLER: extract to…
+Exec=poler-gui extract-to %F
+Icon=package-x-generic
+
+[Desktop Action verify]
+Name=POLER: проверить целостность
+Name[en]=POLER: verify
+Exec=poler-gui verify %F
+Icon=checkbox
+
+[Desktop Action list]
+Name=POLER: список записей
+Name[en]=POLER: list entries
+Exec=poler-gui list %F
+Icon=text-x-generic
+
+[Desktop Action mount]
+Name=POLER: открыть как папку (FUSE)
+Name[en]=POLER: mount as folder (FUSE)
+Exec=poler-gui mount %F
+Icon=folder-open
+
+[Desktop Action boxExtract]
+Name=POLER BOX: безопасно извлечь
+Name[en]=POLER BOX: safe extract
+Exec=poler-gui box-extract %F
+Icon=security-high

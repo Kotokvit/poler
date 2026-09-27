@@ -1,0 +1,44 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build (poler-archive + poler-box)
+        run: cargo build --release --verbose
+      - name: Tests
+        run: cargo test -p poler-archive --verbose
+      - name: Smoke round-trip (unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          mkdir -p smoke/data/nested
+          echo "hello poler" > smoke/data/a.txt
+          dd if=/dev/urandom of=smoke/data/nested/b.bin bs=1k count=256 2>/dev/null
+          ./target/release/poler create smoke.poler smoke/data
+          ./target/release/poler verify smoke.poler
+          ./target/release/poler extract smoke.poler out
+          diff smoke/data/a.txt out/smoke/data/a.txt
+          cmp smoke/data/nested/b.bin out/smoke/data/nested/b.bin
+          echo "SMOKE OK"
+
+  fuse:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: libfuse3
+        run: sudo apt-get update && sudo apt-get install -y libfuse3-dev
+      - name: Build poler-fuse
+        run: cargo build -p poler-fuse --verbose

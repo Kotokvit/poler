@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-poler">
+    <comment>POLER sovereign archive</comment>
+    <comment xml:lang="ru">Суверенный архив POLER</comment>
+    <glob pattern="*.poler"/>
+    <glob pattern="*.t5z"/>
+  </mime-type>
+</mime-info>

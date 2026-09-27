@@ -1,0 +1,23 @@
+[package]
+name = "poler-fuse"
+description = "poler-fuse: монтирование .poler-архива как каталога (FUSE). Работает во ВСЕХ файловых менеджерах Linux: Dolphin, Nautilus, Nemo, Thunar, PCManFM, Caja, mc, ranger, yazi."
+version.workspace = true
+edition.workspace = true
+license-file = "LICENSE.md"
+repository.workspace = true
+authors.workspace = true
+keywords = ["fuse", "filesystem", "archive", "poler"]
+categories = ["filesystem"]
+
+[lib]
+name = "poler_fuse"
+path = "src/lib.rs"
+
+[[bin]]
+name = "poler-fuse"
+path = "src/bin/poler-fuse.rs"
+
+[dependencies]
+fuser = "0.15"
+poler-archive = { path = "../poler-archive" }
+libc = "0.2"

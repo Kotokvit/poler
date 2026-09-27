@@ -1,0 +1,24 @@
+[package]
+name = "poler-box"
+description = "POLER BOX: нативная коробка «без ОС» поверх .poler-архивов — userns/pivot_root/seccomp/netns/pidns, без Docker. Извлечён из poler-engine v0.61.0."
+version.workspace = true
+edition.workspace = true
+license-file = "LICENSE.md"
+repository.workspace = true
+authors.workspace = true
+keywords = ["sandbox", "namespace", "seccomp", "archive", "security"]
+categories = ["command-line-utilities", "os::linux-apis"]
+
+[lib]
+name = "poler_box"
+path = "src/lib.rs"
+
+[[bin]]
+name = "poler-box"
+path = "src/bin/poler-box.rs"
+
+[dependencies]
+libc = "0.2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+poler-archive = { path = "../poler-archive" }

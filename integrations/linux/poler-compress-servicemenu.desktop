@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Service
+X-KDE-ServiceTypes=KonqPopupMenu/Plugin
+MimeType=application/octet-stream;
+Actions=compressPoler;
+
+[Desktop Action compressPoler]
+Name=POLER: сжать в .poler
+Name[en]=POLER: compress to .poler
+Exec=poler-gui compress %F
+Icon=package-x-generic

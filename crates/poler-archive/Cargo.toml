@@ -1,0 +1,29 @@
+[package]
+name = "poler-archive"
+description = "POLER: суверенный стриминговый архиватор .poler — FastCDC-чанки + BLAKE3-дедуп + zstd-ярусы + файловая таблица в трейлере. Извлечён из poler-engine v0.61.0: ноль зависимостей от движка."
+version.workspace = true
+edition.workspace = true
+license-file = "LICENSE.md"
+repository.workspace = true
+authors.workspace = true
+keywords = ["archive", "backup", "streaming", "dedup", "cdc"]
+categories = ["command-line-utilities", "compression"]
+
+[lib]
+name = "poler_archive"
+path = "src/lib.rs"
+
+[[bin]]
+name = "poler"
+path = "src/bin/poler.rs"
+
+[dependencies]
+# Тот же набор, что у движка для этих модулей (Cargo.lock poler-engine:
+# zstd 0.13.3 / blake3 1.8.7 / flate2 1.1.9 / memmap2 0.9.11)
+zstd = "0.13"
+blake3 = "1.5"
+flate2 = { version = "1.0", default-features = false, features = ["rust_backend"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+memmap2 = "0.9"
+libc = "0.2"

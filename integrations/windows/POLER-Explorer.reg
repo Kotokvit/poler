@@ -1,0 +1,38 @@
+Windows Registry Editor Version 5.00
+
+; POLER — контекстное меню Проводника для .poler-архивов.
+; Требует: poler.exe в PATH (или поправь пути ниже).
+; Установка: двойной клик по файлу (или reg import POLER-Explorer.reg).
+
+[HKEY_CURRENT_USER\Software\Classes\.poler]
+@="poler.archive"
+
+[HKEY_CURRENT_USER\Software\Classes\poler.archive]
+@="POLER Sovereign Archive"
+
+[HKEY_CURRENT_USER\Software\Classes\poler.archive\DefaultIcon]
+@="poler.exe,0"
+
+[HKEY_CURRENT_USER\Software\Classes\poler.archive\shell\extractHere]
+@="POLER: extract here"
+
+[HKEY_CURRENT_USER\Software\Classes\poler.archive\shell\extractHere\command]
+@="powershell -NoProfile -ExecutionPolicy Bypass -File \"%POLER_HOME%\\poler-shell.ps1\" extract-here \"%1\""
+
+[HKEY_CURRENT_USER\Software\Classes\poler.archive\shell\extractTo]
+@="POLER: extract to folder..."
+
+[HKEY_CURRENT_USER\Software\Classes\poler.archive\shell\extractTo\command]
+@="powershell -NoProfile -ExecutionPolicy Bypass -File \"%POLER_HOME%\\poler-shell.ps1\" extract-to \"%1\""
+
+[HKEY_CURRENT_USER\Software\Classes\poler.archive\shell\verify]
+@="POLER: verify integrity"
+
+[HKEY_CURRENT_USER\Software\Classes\poler.archive\shell\verify\command]
+@="powershell -NoProfile -ExecutionPolicy Bypass -File \"%POLER_HOME%\\poler-shell.ps1\" verify \"%1\""
+
+[HKEY_CURRENT_USER\Software\Classes\poler.archive\shell\list]
+@="POLER: list entries"
+
+[HKEY_CURRENT_USER\Software\Classes\poler.archive\shell\list\command]
+@="powershell -NoProfile -ExecutionPolicy Bypass -File \"%POLER_HOME%\\poler-shell.ps1\" list \"%1\""

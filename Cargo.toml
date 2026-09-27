@@ -1,0 +1,17 @@
+[workspace]
+resolver = "2"
+members = ["crates/poler-archive", "crates/poler-box", "crates/poler-fuse"]
+# poler-fuse требует libfuse (pkg-config fuse) — не входит в сборку по умолчанию;
+# сборка: cargo build -p poler-fuse (или install.sh соберёт сам при наличии libfuse)
+default-members = ["crates/poler-archive", "crates/poler-box"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license-file = "LICENSE.md"
+repository = "https://github.com/Kotokvit/poler"
+authors = ["Kotokvit <213886740+Kotokvit@users.noreply.github.com>"]
+
+[profile.release]
+lto = "thin"
+strip = "symbols"

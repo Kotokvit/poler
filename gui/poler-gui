@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+# poler-gui — графическая обёртка POLER для файловых менеджеров Linux.
+# Зависимости: poler (+ poler-box) в PATH; yad (или zenity) для диалогов;
+# poler-fuse + fusermount для действия «открыть как папку».
+# Вызывается из контекстных меню (ServiceMenus/Nautilus/Nemo/Thunar),
+# но работает и standalone из терминала.
+set -u
+
+POLER="${POLER_BIN:-poler}"
+POLER_BOX="${POLER_BOX_BIN:-poler-box}"
+
+# ── диалого-движок: yad или zenity ──
+if command -v yad >/dev/null 2>&1; then
+    ui() { yad "$@"; }
+    msg()    { yad --info    --title POLER --text "$1" --width 480; }
+    err()    { yad --error   --title POLER --text "$1" --width 480; }
+    ask_dir(){ yad --file --directory --title "$1" 2>/dev/null; }
+    ask_out(){ yad --file --save --title "$1" --filename="$1" 2>/dev/null; }
+elif command -v zenity >/dev/null 2>&1; then
+    ui() { zenity "$@"; }
+    msg()    { zenity --info    --title POLER --text="$1" --width=480 2>/dev/null; }
+    err()    { zenity --error   --title POLER --text="$1" --width=480 2>/dev/null; }
+    ask_dir(){ zenity --file-selection --directory --title="$1" 2>/dev/null; }
+    ask_out(){ zenity --file-selection --save --title="$1" --filename="$1" 2>/dev/null; }
+else
+    # без GUI-движка — консольный fallback
+    msg() { printf '%s\n' "$1"; }
+    err() { printf 'poler-gui: %s\n' "$1" >&2; }
+    ask_dir(){ printf '%s\n' "каталог:"; read -r d; printf '%s' "$d"; }
+    ask_out(){ printf '%s\n' "файл:"; read -r f; printf '%s' "$f"; }
+fi
+
+run_terminal() {  # показать потоковый вывод команды в окне прогресса
+    local title="$1"; shift
+    if command -v yad >/dev/null 2>&1; then
+        "$@" 2>&1 | yad --progress --title "$title" --pulsate --auto-close \
+            --button="Закрыть!gtk-close:0" --width 480 2>/dev/null
+        return "${PIPESTATUS[0]}"
+    elif command -v zenity >/dev/null 2>&1; then
+        "$@" 2>&1 | zenity --progress --title="$title" --pulsate --auto-close 2>/dev/null
+        return "${PIPESTATUS[0]}"
+    else
+        "$@"
+    fi
+}
+
+cmd="${1:-}"; shift || true
+case "$cmd" in
+extract-here)
+    [ $# -eq 0 ] && { err "нет архива"; exit 1; }
+    dir=$(dirname -- "$1")
+    run_terminal "POLER — извлечение" "$POLER" extract "$@" "$dir" && \
+        msg "Извлечено в:\n$dir" || err "Ошибка извлечения (см. вывод)"
+    ;;
+extract-to)
+    [ $# -eq 0 ] && { err "нет архива"; exit 1; }
+    dest=$(ask_dir "Куда извлечь $(basename -- "$1")?") || exit 0
+    [ -z "$dest" ] && exit 0
+    run_terminal "POLER — извлечение" "$POLER" extract "$1" "$dest" && \
+        msg "Извлечено в:\n$dest" || err "Ошибка извлечения"
+    ;;
+verify)
+    [ $# -eq 0 ] && { err "нет архива"; exit 1; }
+    out=$("$POLER" verify "$1" 2>&1) && msg "ЦЕЛОСТНОСТЬ OK\n\n$out" || err "НАРУШЕНИЕ ЦЕЛОСТНОСТИ:\n$out"
+    ;;
+list)
+    [ $# -eq 0 ] && { err "нет архива"; exit 1; }
+    "$POLER" list "$@" 2>/dev/null | \
+        { command -v yad >/dev/null && yad --text-info --title "POLER — $(basename -- "$1")" --width 720 --height 480 \
+          || command -v zenity >/dev/null && zenity --text-info --title "POLER" --width=720 --height=480; }
+    ;;
+compress)
+    [ $# -eq 0 ] && { err "нечего сжимать"; exit 1; }
+    first="$1"; name="${first%/*}"; [ "$name" = "$first" ] && name="$first"
+    out=$(ask_out "Имя .poler-архива" "${name##*/}.poler") || exit 0
+    [ -z "$out" ] && exit 0
+    case "$out" in *.poler) ;; *) out="$out.poler" ;; esac
+    run_terminal "POLER — архивация" "$POLER" create "$out" "$@" && \
+        msg "Архив создан:\n$out" || err "Ошибка архивации"
+    ;;
+mount)
+    [ $# -eq 0 ] && { err "нет архива"; exit 1; }
+    if ! command -v poler-fuse >/dev/null 2>&1; then
+        err "poler-fuse не установлен.\nСоберите: cargo build -p poler-fuse\n(нужен libfuse и /dev/fuse)"
+        exit 1
+    fi
+    mp=$(mktemp -d "${TMPDIR:-/tmp}/poler-mnt-XXXXXX")
+    poler-fuse "$1" "$mp" --foreground &
+    fpid=$!
+    sleep 0.6
+    if mountpoint -q "$mp" 2>/dev/null || [ -n "$(ls -A "$mp" 2>/dev/null)" ]; then
+        msg "Архив смонтирован как папка:\n$mp\n\nПосле работы: fusermount -u $mp"
+        xdg-open "$mp" 2>/dev/null || true
+        wait $fpid
+    else
+        err "Не удалось смонтировать (нет /dev/fuse или libfuse?)"
+        kill $fpid 2>/dev/null; rmdir "$mp" 2>/dev/null
+    fi
+    ;;
+box-extract)
+    [ $# -eq 0 ] && { err "нет архива"; exit 1; }
+    dest=$(ask_dir "Куда безопасно извлечь $(basename -- "$1")?") || exit 0
+    [ -z "$dest" ] && exit 0
+    out=$("$POLER_BOX" safe-extract "$1" "$dest" 2>&1) && \
+        msg "POLER BOX: безопасно извлечено в\n$dest" || err "POLER BOX отказал:\n$out"
+    ;;
+*)
+    printf 'poler-gui — GUI-обёртка POLER для проводников Linux\n\n'
+    printf 'Действия: extract-here|extract-to|verify|list|compress|mount|box-extract ФАЙЛ...\n'
+    printf 'Диалоги: yad (лучший) или zenity; без них — консольный режим.\n'
+    ;;
+esac

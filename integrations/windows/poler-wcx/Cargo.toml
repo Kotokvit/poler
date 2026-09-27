@@ -1,0 +1,14 @@
+[package]
+name = "poler-wcx"
+description = "Total Commander WCX 1.6 plugin for .poler archives: Enter открывает архив, F5 распаковывает, Shift+F1 пакует через poler CLI"
+version = "0.1.0"
+edition = "2021"
+license-file = "../../../LICENSE.md"
+publish = false
+
+[lib]
+name = "poler_wcx"
+crate-type = ["cdylib"]
+
+[dependencies]
+poler-archive = { path = "../../../crates/poler-archive" }
