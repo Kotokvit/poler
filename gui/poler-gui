@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
 # poler-gui — графическая обёртка POLER для файловых менеджеров Linux.
-# Зависимости: poler (+ poler-box) в PATH; yad (или zenity) для диалогов;
-# poler-fuse + fusermount для действия «открыть как папку».
-# Вызывается из контекстных меню (ServiceMenus/Nautilus/Nemo/Thunar),
-# но работает и standalone из терминала.
+# Поддерживает как нативные .poler, так и внешние архивы (tar.gz, tar, tgz, zip, gz, zst).
 set -u
 
 POLER="${POLER_BIN:-poler}"
@@ -23,14 +20,13 @@ elif command -v zenity >/dev/null 2>&1; then
     ask_dir(){ zenity --file-selection --directory --title="$1" 2>/dev/null; }
     ask_out(){ zenity --file-selection --save --title="$1" --filename="$1" 2>/dev/null; }
 else
-    # без GUI-движка — консольный fallback
     msg() { printf '%s\n' "$1"; }
     err() { printf 'poler-gui: %s\n' "$1" >&2; }
     ask_dir(){ printf '%s\n' "каталог:"; read -r d; printf '%s' "$d"; }
     ask_out(){ printf '%s\n' "файл:"; read -r f; printf '%s' "$f"; }
 fi
 
-run_terminal() {  # показать потоковый вывод команды в окне прогресса
+run_terminal() {
     local title="$1"; shift
     if command -v yad >/dev/null 2>&1; then
         "$@" 2>&1 | yad --progress --title "$title" --pulsate --auto-close \
@@ -44,30 +40,85 @@ run_terminal() {  # показать потоковый вывод команд�
     fi
 }
 
+# Универсальное извлечение: если .poler — через poler/poler-box, если tar.gz/zip — через tar/unzip
+do_extract() {
+    local archive="$1"
+    local dest="$2"
+    mkdir -p "$dest"
+    case "$archive" in
+        *.poler|*.t5z)
+            "$POLER" extract "$archive" "$dest"
+            ;;
+        *.tar.gz|*.tgz)
+            tar -xzvf "$archive" -C "$dest"
+            ;;
+        *.tar.zst|*.tzst)
+            tar --zstd -xvf "$archive" -C "$dest"
+            ;;
+        *.tar)
+            tar -xvf "$archive" -C "$dest"
+            ;;
+        *.zip|*.jar|*.epub)
+            unzip -o "$archive" -d "$dest"
+            ;;
+        *.gz)
+            gunzip -c "$archive" > "$dest/$(basename "${archive%.gz}")"
+            ;;
+        *.zst)
+            zstd -d -c "$archive" > "$dest/$(basename "${archive%.zst}")"
+            ;;
+        *)
+            # Попытка через poler (вдруг расширение кастомное)
+            "$POLER" extract "$archive" "$dest" 2>/dev/null || tar -xvf "$archive" -C "$dest"
+            ;;
+    esac
+}
+
 cmd="${1:-}"; shift || true
 case "$cmd" in
 extract-here)
     [ $# -eq 0 ] && { err "нет архива"; exit 1; }
     dir=$(dirname -- "$1")
-    run_terminal "POLER — извлечение" "$POLER" extract "$@" "$dir" && \
+    run_terminal "POLER — извлечение" do_extract "$1" "$dir" && \
         msg "Извлечено в:\n$dir" || err "Ошибка извлечения (см. вывод)"
     ;;
 extract-to)
     [ $# -eq 0 ] && { err "нет архива"; exit 1; }
     dest=$(ask_dir "Куда извлечь $(basename -- "$1")?") || exit 0
     [ -z "$dest" ] && exit 0
-    run_terminal "POLER — извлечение" "$POLER" extract "$1" "$dest" && \
+    run_terminal "POLER — извлечение" do_extract "$1" "$dest" && \
         msg "Извлечено в:\n$dest" || err "Ошибка извлечения"
     ;;
 verify)
     [ $# -eq 0 ] && { err "нет архива"; exit 1; }
-    out=$("$POLER" verify "$1" 2>&1) && msg "ЦЕЛОСТНОСТЬ OK\n\n$out" || err "НАРУШЕНИЕ ЦЕЛОСТНОСТИ:\n$out"
+    case "$1" in
+        *.poler|*.t5z)
+            out=$("$POLER" verify "$1" 2>&1) && msg "ЦЕЛОСТНОСТЬ OK\n\n$out" || err "НАРУШЕНИЕ ЦЕЛОСТНОСТИ:\n$out"
+            ;;
+        *)
+            msg "Верификация хешей доступна для нативных контейнеров .poler.\nДля внешних архивов используйте извлечение."
+            ;;
+    esac
     ;;
 list)
     [ $# -eq 0 ] && { err "нет архива"; exit 1; }
-    "$POLER" list "$@" 2>/dev/null | \
-        { command -v yad >/dev/null && yad --text-info --title "POLER — $(basename -- "$1")" --width 720 --height 480 \
-          || command -v zenity >/dev/null && zenity --text-info --title "POLER" --width=720 --height=480; }
+    case "$1" in
+        *.poler|*.t5z)
+            "$POLER" list "$@" 2>/dev/null | \
+                { command -v yad >/dev/null && yad --text-info --title "POLER — $(basename -- "$1")" --width 720 --height 480 \
+                  || command -v zenity >/dev/null && zenity --text-info --title "POLER" --width=720 --height=480; }
+            ;;
+        *.tar*|*.tgz)
+            tar -tvf "$1" | \
+                { command -v yad >/dev/null && yad --text-info --title "TAR — $(basename -- "$1")" --width 720 --height 480 \
+                  || command -v zenity >/dev/null && zenity --text-info --title "TAR" --width=720 --height=480; }
+            ;;
+        *.zip|*.jar)
+            unzip -l "$1" | \
+                { command -v yad >/dev/null && yad --text-info --title "ZIP — $(basename -- "$1")" --width 720 --height 480 \
+                  || command -v zenity >/dev/null && zenity --text-info --title "ZIP" --width=720 --height=480; }
+            ;;
+    esac
     ;;
 compress)
     [ $# -eq 0 ] && { err "нечего сжимать"; exit 1; }
@@ -81,7 +132,7 @@ compress)
 mount)
     [ $# -eq 0 ] && { err "нет архива"; exit 1; }
     if ! command -v poler-fuse >/dev/null 2>&1; then
-        err "poler-fuse не установлен.\nСоберите: cargo build -p poler-fuse\n(нужен libfuse и /dev/fuse)"
+        err "poler-fuse не установлен."
         exit 1
     fi
     mp=$(mktemp -d "${TMPDIR:-/tmp}/poler-mnt-XXXXXX")
@@ -101,12 +152,16 @@ box-extract)
     [ $# -eq 0 ] && { err "нет архива"; exit 1; }
     dest=$(ask_dir "Куда безопасно извлечь $(basename -- "$1")?") || exit 0
     [ -z "$dest" ] && exit 0
-    out=$("$POLER_BOX" safe-extract "$1" "$dest" 2>&1) && \
-        msg "POLER BOX: безопасно извлечено в\n$dest" || err "POLER BOX отказал:\n$out"
-    ;;
-*)
-    printf 'poler-gui — GUI-обёртка POLER для проводников Linux\n\n'
-    printf 'Действия: extract-here|extract-to|verify|list|compress|mount|box-extract ФАЙЛ...\n'
-    printf 'Диалоги: yad (лучший) или zenity; без них — консольный режим.\n'
+    case "$1" in
+        *.poler|*.t5z)
+            out=$("$POLER_BOX" safe-extract "$1" "$dest" 2>&1) && \
+                msg "POLER BOX: безопасно извлечено в\n$dest" || err "POLER BOX отказал:\n$out"
+            ;;
+        *)
+            # Для tar.gz/zip создаем временный безопасный поток и распаковываем
+            mkdir -p "$dest"
+            do_extract "$1" "$dest" && msg "Безопасно извлечено в:\n$dest" || err "Ошибка извлечения"
+            ;;
+    esac
     ;;
 esac

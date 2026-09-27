@@ -1,12 +1,10 @@
-//! poler-fuse: `.poler`-архив как каталог (FUSE, только чтение).
+//! poler-fuse — FUSE-монтирование .poler-архивов как доступных на чтение папок.
 //!
-//! После `poler-fuse ARCHIVE.poler /mnt/point` архив виден ПАПКОЙ во всех
-//! файловых менеджерах Linux (Dolphin/Nautilus/Nemo/Thunar/PCManFM/Caja,
-//! mc/ranger/yazi) и во всех программах: копирование, grep, просмотр —
-//! без распаковки на диск. Чтение — mmap-ридер с O(log n) доступом.
-//!
-//! Требует libfuse (пакет fuse3/libfuse3-dev) и /dev/fuse — поэтому крейт
-//! НЕ входит в default-members workspace: `cargo build -p poler-fuse`.
+//! Архитектура:
+//!   - дерево каталогов восстанавливается из файловой таблицы при монтировании;
+//!   - чтение файлов идёт через `PolerReader::read_range` напрямую из mmap/zstd;
+//!   - inode 1 = корень; каталоги получают синтетические inode;
+//!   - только чтение (EROFS на любые попытки записи).
 
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
@@ -14,26 +12,19 @@ use std::path::Path;
 use std::time::{Duration, SystemTime};
 
 use fuser::{
-    FileAttr, Filesystem, KernelConfig, ReplyAttr, ReplyData, ReplyDirectory, ReplyEmpty,
-    ReplyEntry, ReplyOpen, Request,
+    FileAttr, Filesystem, KernelConfig, ReplyAttr, ReplyData, ReplyDirectory, ReplyEntry,
+    ReplyOpen, Request,
 };
 use poler_archive::PolerReader;
 
 const TTL: Duration = Duration::from_secs(1);
 const ROOT_INO: u64 = 1;
 
-/// Собрать виртуальное дерево путей из плоской таблицы файлов архива.
-pub struct PolerFs {
-    reader: PolerReader,
-    /// inode -> (имя, родитель, файловая запись или каталог)
-    nodes: BTreeMap<u64, FsNode>,
-    next_ino: u64,
-}
-
+#[derive(Debug, Clone)]
 struct FsNode {
     name: String,
     parent: u64,
-    /// None = каталог, Some(idx) = индекс в reader.files()
+    /// Индекс в `PolerReader::files()`, если это регулярный файл
     file: Option<usize>,
 }
 
@@ -43,10 +34,16 @@ impl FsNode {
     }
 }
 
+pub struct PolerFs {
+    reader: PolerReader,
+    nodes: BTreeMap<u64, FsNode>,
+    next_ino: u64,
+}
+
 impl PolerFs {
-    pub fn open(archive: &Path) -> Result<PolerFs, String> {
-        let reader = PolerReader::open(archive)?;
-        let mut fs = PolerFs {
+    pub fn open(path: &Path) -> Result<Self, String> {
+        let reader = PolerReader::open(path)?;
+        let mut fs = Self {
             reader,
             nodes: BTreeMap::new(),
             next_ino: ROOT_INO + 1,
@@ -59,20 +56,25 @@ impl PolerFs {
                 file: None,
             },
         );
-        for (idx, f) in fs.reader.files().iter().enumerate() {
+
+        let file_names: Vec<(usize, String)> = fs
+            .reader
+            .files()
+            .iter()
+            .enumerate()
+            .map(|(idx, f)| (idx, f.name.clone()))
+            .collect();
+
+        for (idx, name) in file_names {
             let mut path_parts: Vec<&str> =
-                f.name.split('/').filter(|s| !s.is_empty()).collect();
+                name.split('/').filter(|s| !s.is_empty()).collect();
             if path_parts.is_empty() {
                 continue;
             }
             let file_name = path_parts.pop().unwrap().to_string();
-            // промежуточные каталоги
             let mut parent = ROOT_INO;
-            let mut walked = String::new();
             for dir in path_parts {
-                walked.push_str(dir);
                 parent = fs.ensure_dir(parent, dir);
-                walked.push('/');
             }
             let ino = fs.alloc_ino();
             fs.nodes.insert(
@@ -114,27 +116,15 @@ impl PolerFs {
     }
 
     fn attr(&self, ino: u64) -> FileAttr {
-        let now = SystemTime::now();
-        let node = self.nodes.get(&ino);
-        let (kind, size, name_len) = match node {
-            None => (fuser::FileType::RegularFile, 0, 0),
-            Some(n) if n.is_dir() => {
-                let children = self
-                    .nodes
-                    .values()
-                    .filter(|c| c.parent == ino)
-                    .count() as u64;
-                (fuser::FileType::Directory, 4096.max(children * 32), 0)
-            }
-            Some(n) => {
-                let size = n
-                    .file
-                    .map(|i| self.reader.files()[i].raw_len)
-                    .unwrap_or(0);
-                (fuser::FileType::RegularFile, size, 0)
-            }
+        let node = &self.nodes[&ino];
+        let (size, kind) = match node.file {
+            Some(idx) => (
+                self.reader.files()[idx].raw_len,
+                fuser::FileType::RegularFile,
+            ),
+            None => (0, fuser::FileType::Directory),
         };
-        let _ = name_len;
+        let now = SystemTime::now();
         FileAttr {
             ino,
             size,
@@ -150,8 +140,8 @@ impl PolerFs {
                 0o444
             },
             nlink: 1,
-            uid: fuser::getuid().unwrap_or(0),
-            gid: fuser::getgid().unwrap_or(0),
+            uid: unsafe { libc::getuid() },
+            gid: unsafe { libc::getgid() },
             rdev: 0,
             blksize: 512,
             flags: 0,
@@ -244,14 +234,14 @@ impl Filesystem for PolerFs {
             reply.error(libc::ENOENT);
             return;
         }
-        let mut children: Vec<(u64, &str, fuser::FileType)> = self
+        let mut children: Vec<(u64, String, fuser::FileType)> = self
             .nodes
             .iter()
             .filter(|(_, n)| n.parent == ino)
             .map(|(child_ino, n)| {
                 (
                     *child_ino,
-                    n.name.as_str(),
+                    n.name.clone(),
                     if n.is_dir() {
                         fuser::FileType::Directory
                     } else {
@@ -260,12 +250,12 @@ impl Filesystem for PolerFs {
                 )
             })
             .collect();
-        children.sort();
+        children.sort_by(|a, b| a.1.cmp(&b.1));
         children.insert(
             0,
             (
                 ino,
-                ".",
+                ".".to_string(),
                 fuser::FileType::Directory,
             ),
         );
@@ -273,18 +263,21 @@ impl Filesystem for PolerFs {
             1,
             (
                 self.nodes[&ino].parent,
-                "..",
+                "..".to_string(),
                 fuser::FileType::Directory,
             ),
         );
-        for (i, (child_ino, name, kind)) in children.iter().enumerate().skip(offset.max(0) as usize)
-        {
-            if reply.add(*child_ino, i as i64 + 1, *kind, name) {
-                break; // буфер переполнен — продолжение со следующего offset
+
+        let entries: Vec<(u64, fuser::FileType, String)> = children
+            .into_iter()
+            .map(|(child_ino, name, kind)| (child_ino, kind, name))
+            .collect();
+
+        for (i, (child_ino, kind, name)) in entries.iter().enumerate().skip(offset as usize) {
+            if reply.add(*child_ino, (i + 1) as i64, *kind, name) {
+                break;
             }
         }
         reply.ok();
     }
-
-    fn destroy(&mut self) {}
 }

@@ -54,14 +54,16 @@ fn collect_entries(root: &Path, cur: &Path, out: &mut Vec<TarEntry>) -> Result<(
     let meta = fs::symlink_metadata(cur).map_err(|e| format!("{}: {e}", cur.display()))?;
     let name = to_arc_name(root, cur);
     if meta.is_dir() {
-        out.push(TarEntry {
-            name: format!("{name}/"),
-            is_dir: true,
-            size: 0,
-            mode: unix_mode(&meta),
-            mtime: unix_mtime(&meta),
-            src: None,
-        });
+        if !name.is_empty() {
+            out.push(TarEntry {
+                name: format!("{name}/"),
+                is_dir: true,
+                size: 0,
+                mode: unix_mode(&meta),
+                mtime: unix_mtime(&meta),
+                src: None,
+            });
+        }
         let mut children: Vec<PathBuf> = fs::read_dir(cur)
             .map_err(|e| format!("{}: {e}", cur.display()))?
             .filter_map(|e| e.ok())
@@ -86,9 +88,13 @@ fn collect_entries(root: &Path, cur: &Path, out: &mut Vec<TarEntry>) -> Result<(
     Ok(())
 }
 
-fn to_arc_name(_root: &Path, cur: &Path) -> String {
-    // как GNU tar: имя относительное, ведущие '/' срезаются
-    let s = cur.to_string_lossy().replace('\\', "/");
+fn to_arc_name(root: &Path, cur: &Path) -> String {
+    let base = root.parent().unwrap_or(root);
+    let rel = match cur.strip_prefix(base) {
+        Ok(r) => r,
+        Err(_) => cur.strip_prefix(root).unwrap_or(cur),
+    };
+    let s = rel.to_string_lossy().replace('\\', "/");
     let s = s.trim_start_matches("./");
     let s = s.trim_start_matches('/');
     s.to_string()
@@ -230,19 +236,34 @@ fn split_ustar_name(name: &str) -> Result<(String, String), String> {
     if n.len() <= 100 {
         return Ok((name.to_string(), String::new()));
     }
-    // POSIX-ustar: prefix[155] + '/' + name[100]
-    let cut = n.len() - 100;
-    if n.len() > 255 || !n[cut..].iter().all(|&c| c != 0) {
+    if n.len() > 256 {
         return Err(format!(
-            "имя записи длиннее ustar-поля (255): «{name}» — используйте GNU tar в конвейере"
+            "имя записи длиннее ustar-поля (256 байт): «{name}» (длина: {})",
+            n.len()
         ));
     }
-    let prefix = String::from_utf8_lossy(&n[..cut]).trim_end_matches('/').to_string();
-    let file = String::from_utf8_lossy(&n[cut..]).to_string();
-    if prefix.is_empty() || file.is_empty() {
-        return Err(format!("не удалось разделить ustar-имя: «{name}»"));
+    // В стандарте POSIX ustar: prefix (до 155 байт) + '/' + name (до 100 байт).
+    // Ищем подходящий слэш '/', разделяющий строку на prefix <= 155 и file <= 100.
+    let mut split_pos = None;
+    for (idx, b) in name.char_indices() {
+        if b == '/' {
+            let prefix_len = idx;
+            let file_len = name.len() - idx - 1;
+            if prefix_len <= 155 && file_len <= 100 && file_len > 0 {
+                split_pos = Some(idx);
+            }
+        }
     }
-    Ok((file, prefix))
+    if let Some(pos) = split_pos {
+        let prefix = &name[..pos];
+        let file = &name[pos + 1..];
+        Ok((file.to_string(), prefix.to_string()))
+    } else {
+        Err(format!(
+            "не удалось разделить путь «{name}» (длина {}) по слэшу на prefix <= 155 и name <= 100",
+            name.len()
+        ))
+    }
 }
 
 fn put_field(dst: &mut [u8], val: &[u8]) -> io::Result<()> {
